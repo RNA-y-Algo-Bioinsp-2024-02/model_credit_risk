@@ -1,0 +1,39 @@
+name: Deploy to Render
+
+on:
+  push:
+    branches:
+      - main 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Get Service ID from Render
+      id: get-service-id
+      env:
+        RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+      run: |
+        SERVICE_NAME="model_credit_risk-1"  # Nombre de tu servicio en Render
+        SERVICE_ID=$(curl -s -X GET \
+          -H "Authorization: Bearer $RENDER_API_TOKEN" \
+          https://api.render.com/v1/services | jq -r ".[] | select(.name==\"$SERVICE_NAME\") | .id")
+        if [ -z "$SERVICE_ID" ]; then
+          echo "Service ID not found for $SERVICE_NAME"
+          exit 1
+        fi
+        echo "SERVICE_ID=$SERVICE_ID" >> $GITHUB_ENV
+
+    - name: Trigger Deploy on Render
+      env:
+        RENDER_API_TOKEN: ${{ secrets.RENDER_API_TOKEN }}
+        SERVICE_ID: ${{ env.SERVICE_ID }}
+      run: |
+        curl -X POST \
+          -H "Authorization: Bearer $RENDER_API_TOKEN" \
+          -H "Content-Type: application/json" \
+          https://api.render.com/v1/services/$SERVICE_ID/deploys

@@ -27,7 +27,7 @@ def focal_loss_multi_class(alpha, gamma=2.0):
 class_weights = [0.25]
 custom_loss = focal_loss_multi_class(alpha=class_weights)
 
-model = load_model('model_classes_unified_2.h5', custom_objects={'focal_loss_fixed': custom_loss})
+model = load_model('modelo_final_local2.h5', custom_objects={'focal_loss_fixed': custom_loss})
 
 app = FastAPI()
 
