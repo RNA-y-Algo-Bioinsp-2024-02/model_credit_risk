@@ -3,23 +3,18 @@ from pydantic import BaseModel
 import numpy as np
 from tensorflow.keras.models import load_model
 import tensorflow as tf
+from fastapi.middleware.cors import CORSMiddleware
 
 def focal_loss_multi_class(alpha, gamma=2.0):
-    """
-    alpha: array de tamaño [num_classes] con el peso para cada clase
-    gamma: factor para penalizar más los ejemplos mal clasificados
-    """
     alpha = tf.constant(alpha, dtype=tf.float32)
 
     def focal_loss_fixed(y_true, y_pred):
         y_pred = tf.clip_by_value(y_pred, 1e-7, 1 - 1e-7)
         cross_entropy = -y_true * tf.math.log(y_pred)
-
         alpha_factor = tf.reduce_sum(alpha * y_true, axis=1)
         p_t = tf.reduce_sum(y_pred * y_true, axis=1)
         focal_factor = tf.pow((1 - p_t), gamma)
         loss = alpha_factor * focal_factor * tf.reduce_sum(cross_entropy, axis=1)
-
         return tf.reduce_mean(loss)
 
     return focal_loss_fixed
@@ -30,6 +25,14 @@ custom_loss = focal_loss_multi_class(alpha=class_weights)
 model = load_model('modelo_final_local2.h5', custom_objects={'focal_loss_fixed': custom_loss})
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 home_ownership_categories = ["ANY", "MORTGAGE", "NONE", "OTHER", "OWN", "RENT"]
 verification_status_categories = ["Not Verified", "Source Verified", "Verified"]
