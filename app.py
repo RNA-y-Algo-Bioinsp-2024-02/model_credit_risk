@@ -1,83 +1,95 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import numpy as np
-from tensorflow.keras.models import load_model
 import tensorflow as tf
+from tensorflow.keras.models import load_model
 from fastapi.middleware.cors import CORSMiddleware
+import h5py
 
 def focal_loss_multi_class(alpha, gamma=2.0):
     alpha = tf.constant(alpha, dtype=tf.float32)
 
     def focal_loss_fixed(y_true, y_pred):
-        y_pred = tf.clip_by_value(y_pred, 1e-7, 1 - 1e-7)
+        # Clip predictions
+        y_pred = tf.clip_by_value(y_pred, 1e-7, 1.0 - 1e-7)
+
+        # Standard cross-entropy
         cross_entropy = -y_true * tf.math.log(y_pred)
+
+        # Calculate alpha for the specific class
         alpha_factor = tf.reduce_sum(alpha * y_true, axis=1)
+
+        # Probability of the true class
         p_t = tf.reduce_sum(y_pred * y_true, axis=1)
-        focal_factor = tf.pow((1 - p_t), gamma)
+
+        # Focal factor
+        focal_factor = tf.pow((1.0 - p_t), gamma)
+
+        # Combine everything
         loss = alpha_factor * focal_factor * tf.reduce_sum(cross_entropy, axis=1)
         return tf.reduce_mean(loss)
 
     return focal_loss_fixed
 
+# If you need class weights, define them here
 class_weights = [0.25]
-custom_loss = focal_loss_multi_class(alpha=class_weights)
 
-model = load_model('modelo_final_local2.h5', custom_objects={'focal_loss_fixed': custom_loss})
+model_path = "modelo_final_bueno.h5"
+
+try:
+    with h5py.File(model_path, "r") as f:
+        print("Modelo H5 cargado correctamente.")
+
+    # Provide *all possible* loss names that could be stored in the .h5
+    # so we avoid the "Unknown loss function" error.
+    model = load_model(
+        model_path,
+        custom_objects={
+            # The literal "loss" key if Keras saved it under 'loss'
+            "loss": focal_loss_multi_class(alpha=class_weights),
+            # The inner function name, if it was saved as focal_loss_fixed
+            "focal_loss_fixed": focal_loss_multi_class(alpha=class_weights),
+            # The outer function name, if it was saved as focal_loss_multi_class
+            "focal_loss_multi_class": focal_loss_multi_class
+        }
+    )
+    print("Modelo cargado exitosamente.")
+
+except Exception as e:
+    print(f"Error al cargar el modelo: {e}")
+    model = None
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"]
 )
 
-home_ownership_categories = ["ANY", "MORTGAGE", "NONE", "OTHER", "OWN", "RENT"]
-verification_status_categories = ["Not Verified", "Source Verified", "Verified"]
-
-home_ownership_mapping = {category: i for i, category in enumerate(home_ownership_categories)}
-verification_status_mapping = {status: i for i, status in enumerate(verification_status_categories)}
-
+# Pydantic model for inputs
 class ModelInput(BaseModel):
-    loan_amnt: float
-    funded_amnt: float
-    funded_amnt_inv: float
-    int_rate: float
+    last_pymnt_d_day_of_week: float
+    last_pymnt_d_month: float
+    last_credit_pull_d_month: float
+    loan_age_years: float
     installment: float
-    annual_inc: float
-    dti: float
-    delinq_2yrs: float
-    inq_last_6mths: float
-    open_acc: float
-    pub_rec: float
-    revol_bal: float
-    revol_util: float
-    total_acc: float
+    recoveries: float
+    days_since_last_payment: float
+    last_credit_pull_d_day_of_week: float
+    out_prncp_inv: float
+    out_prncp: float
+    last_pymnt_d_year: float
+    collection_recovery_fee: float
+    issue_d_year: float
+    last_pymnt_amnt: float
+    last_credit_pull_d_year: float
+    total_rec_prncp: float
+    days_since_last_credit_pull: float
     total_pymnt: float
     total_pymnt_inv: float
-    total_rec_prncp: float
-    total_rec_int: float
-    total_rec_late_fee: float
-    last_pymnt_amnt: float
-    collections_12_mths_ex_med: float
-    acc_now_delinq: float
-    tot_coll_amt: float
-    tot_cur_bal: float
-    total_rev_hi_lim: float
-    emp_length_encoded: float
-    term_encoded: float
-    grade_encoded: float
-    home_ownership_ANY: float
-    home_ownership_MORTGAGE: float
-    home_ownership_NONE: float
-    home_ownership_OTHER: float
-    home_ownership_OWN: float
-    home_ownership_RENT: float
-    verification_status_Not_Verified: float
-    verification_status_Source_Verified: float
-    verification_status_Verified: float
 
 @app.get("/")
 def read_root():
@@ -85,48 +97,47 @@ def read_root():
 
 @app.post("/predict/")
 def predict(input_data: ModelInput):
+    if model is None:
+        return {"error": "Modelo no cargado correctamente"}
+
+    # Convertimos los datos en un array de numpy
     numeric_features = np.array([
-        input_data.loan_amnt, input_data.funded_amnt, input_data.funded_amnt_inv, input_data.int_rate,
-        input_data.installment, input_data.annual_inc, input_data.dti, input_data.delinq_2yrs,
-        input_data.inq_last_6mths, input_data.open_acc, input_data.pub_rec, input_data.revol_bal,
-        input_data.revol_util, input_data.total_acc, input_data.total_pymnt, input_data.total_pymnt_inv,
-        input_data.total_rec_prncp, input_data.total_rec_int, input_data.total_rec_late_fee, input_data.last_pymnt_amnt,
-        input_data.collections_12_mths_ex_med, input_data.acc_now_delinq, input_data.tot_coll_amt,
-        input_data.tot_cur_bal, input_data.total_rev_hi_lim, input_data.emp_length_encoded, input_data.term_encoded,
-        input_data.grade_encoded
-    ])
-    
-    if not any([
-        input_data.home_ownership_ANY, input_data.home_ownership_MORTGAGE, input_data.home_ownership_NONE,
-        input_data.home_ownership_OTHER, input_data.home_ownership_OWN, input_data.home_ownership_RENT
-    ]):
-        return {"error": "Se requiere al menos una categoría de home_ownership codificada."}
-    
-    if not any([
-        input_data.verification_status_Not_Verified, input_data.verification_status_Source_Verified,
-        input_data.verification_status_Verified
-    ]):
-        return {"error": "Se requiere al menos una categoría de verification_status codificada."}
+        input_data.last_pymnt_d_day_of_week,
+        input_data.last_pymnt_d_month,
+        input_data.last_credit_pull_d_month,
+        input_data.loan_age_years,
+        input_data.installment,
+        input_data.recoveries,
+        input_data.days_since_last_payment,
+        input_data.last_credit_pull_d_day_of_week,
+        input_data.out_prncp_inv,
+        input_data.out_prncp,
+        input_data.last_pymnt_d_year,
+        input_data.collection_recovery_fee,
+        input_data.issue_d_year,
+        input_data.last_pymnt_amnt,
+        input_data.last_credit_pull_d_year,
+        input_data.total_rec_prncp,
+        input_data.days_since_last_credit_pull,
+        input_data.total_pymnt,
+        input_data.total_pymnt_inv
+    ]).reshape(1, -1)
 
-    data = np.concatenate((
-        numeric_features, 
-        np.array([
-            input_data.home_ownership_ANY, input_data.home_ownership_MORTGAGE, input_data.home_ownership_NONE,
-            input_data.home_ownership_OTHER, input_data.home_ownership_OWN, input_data.home_ownership_RENT,
-            input_data.verification_status_Not_Verified, input_data.verification_status_Source_Verified,
-            input_data.verification_status_Verified
-        ])
-    )).reshape(1, -1)
+    # Hacer la predicción
+    prediction = model.predict(numeric_features)
 
-    prediction = model.predict(data)
-    
+    # Si la salida es binaria (1 sola neurona en la capa de salida)
     if prediction.shape[1] == 1:
-        prob_class_1 = prediction[0][0]
-        prob_class_0 = 1 - prob_class_1
-        return {"probability_class_0": prob_class_0, "probability_class_1": prob_class_1}
-    
+        prob_class_1 = float(prediction[0][0])
+        prob_class_0 = 1.0 - prob_class_1
+        return {
+            "probability_class_0": prob_class_0,
+            "probability_class_1": prob_class_1
+        }
+
+    # Si el modelo es multiclase (varias neuronas en la capa de salida)
     elif prediction.shape[1] > 1:
         class_probabilities = prediction[0].tolist()
         return {"class_probabilities": class_probabilities}
-    
-    return {"error": "El modelo no tiene un número de salidas esperado para clasificación binaria o multiclase"}
+
+    return {"error": "El modelo no tiene un número de salidas esperado."}
